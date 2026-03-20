@@ -78,6 +78,7 @@ def print_welcome() -> None:
     console.print("[yellow]可用命令：[/yellow]")
     console.print("  [cyan]/new[/cyan]     - 开启新的分析会话")
     console.print("  [cyan]/memory[/cyan]  - 查看并恢复之前的会话")
+    console.print("  [cyan]/hot[/cyan]     - 热点抓取与态势感知（独立流程，生成 HTML）")
     console.print("  [cyan]/models[/cyan]  - 查看所有模型配置")
     console.print("  [cyan]/tools[/cyan]   - 查看所有可用工具")
     console.print("  [cyan]/clear[/cyan]   - 清除 memory 和 sandbox")
