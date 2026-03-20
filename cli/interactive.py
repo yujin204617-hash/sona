@@ -748,6 +748,90 @@ def run_session_loop(task_id: Optional[str] = None) -> None:
                     print_status(f"任务目录: sandbox/{task_id}/", "info")
                     console.print(f"\n[cyan]会话已保存，已退出到主页面[/cyan]\n")
                     return  # 返回到主页面
+
+                # 处理 /compress 命令（手动压缩上下文）
+                if user_input.strip() == "/compress":
+                    session_data = session_manager.load_session(task_id)
+                    if not session_data:
+                        console.print("[red]无法加载会话数据，压缩失败[/red]")
+                        continue
+
+                    # 将当前会话消息转换为 BaseMessage 列表
+                    current_messages = messages_from_session_data(session_data)
+
+                    # 读取当前累计 completion_tokens（用于与 auto-compress 一致的阈值逻辑）
+                    current_completion_tokens = 0
+                    if isinstance(session_data, dict) and "token_usage" in session_data:
+                        current_completion_tokens = session_data["token_usage"].get("completion_tokens", 0) or 0
+
+                    # 执行压缩
+                    compressed_messages, was_compressed, compression_summary = compress_messages(
+                        current_messages,
+                        max_completion_tokens=20000,
+                        current_completion_tokens=current_completion_tokens,
+                    )
+
+                    if not was_compressed:
+                        console.print("[yellow]当前上下文未达到压缩条件（或无可压缩内容）。[/yellow]")
+                        continue
+
+                    # 转换为 session 可存储的 dict 列表（与 run_session_query 的 compression 分支一致）
+                    compressed_messages_dict = []
+                    for msg in compressed_messages:
+                        if isinstance(msg, SystemMessage):
+                            continue
+                        elif isinstance(msg, HumanMessage):
+                            compressed_messages_dict.append(
+                                {
+                                    "role": "user",
+                                    "content": msg.content,
+                                    "timestamp": datetime.now().isoformat(),
+                                }
+                            )
+                        elif isinstance(msg, AIMessage):
+                            tool_calls_data = []
+                            if hasattr(msg, "tool_calls") and msg.tool_calls:
+                                for tc in msg.tool_calls:
+                                    if isinstance(tc, dict):
+                                        tool_calls_data.append(tc)
+                                    else:
+                                        tool_calls_data.append(
+                                            {
+                                                "name": getattr(tc, "name", ""),
+                                                "args": getattr(tc, "args", {}),
+                                                "id": getattr(tc, "id", ""),
+                                            }
+                                        )
+                            compressed_messages_dict.append(
+                                {
+                                    "role": "assistant",
+                                    "content": msg.content or "",
+                                    "tool_calls": tool_calls_data if tool_calls_data else None,
+                                    "timestamp": datetime.now().isoformat(),
+                                }
+                            )
+                        elif isinstance(msg, ToolMessage):
+                            compressed_messages_dict.append(
+                                {
+                                    "role": "tool",
+                                    "content": msg.content,
+                                    "tool_name": getattr(msg, "name", "unknown"),
+                                    "tool_call_id": msg.tool_call_id,
+                                    "timestamp": datetime.now().isoformat(),
+                                }
+                            )
+
+                    # 写回 session，并重置 token_usage（因为压缩后的上下文变短）
+                    session_manager.replace_messages(task_id, compressed_messages_dict, reset_token_usage=True)
+
+                    # 同步更新内存中的 previous_messages，保证后续提问基于压缩后的上下文
+                    previous_messages = messages_from_session_data(session_manager.load_session(task_id) or {})
+
+                    console.print("[green]✅ 上下文已压缩并写回会话记忆（token 统计已重置）。[/green]")
+                    if compression_summary:
+                        summary_display = compression_summary[:400] + "..." if len(compression_summary) > 400 else compression_summary
+                        console.print(f"[dim]{summary_display}[/dim]")
+                    continue
                 
                 # 其他系统命令在main.py中处理，这里只处理/exit
                 console.print(f"[yellow]在会话中，只能使用 /exit 退出会话[/yellow]")
