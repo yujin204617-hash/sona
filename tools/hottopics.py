@@ -64,14 +64,16 @@ def load_env_file(env_path: Optional[str] = None) -> None:
 
 
 def apply_env_aliases() -> None:
-    if "INSIGHT_ENGINE_API_KEY" not in os.environ and os.environ.get("KIMI_API_KEY"):
-        os.environ["INSIGHT_ENGINE_API_KEY"] = os.environ["KIMI_API_KEY"]
-    if "REPORT_ENGINE_API_KEY" not in os.environ and os.environ.get("KIMI_API_KEY"):
-        os.environ["REPORT_ENGINE_API_KEY"] = os.environ["KIMI_API_KEY"]
-    if "QUERY_ENGINE_API_KEY" not in os.environ and os.environ.get("KIMI_API_KEY"):
-        os.environ["QUERY_ENGINE_API_KEY"] = os.environ["KIMI_API_KEY"]
-    if "OPENAI_API_KEY" not in os.environ and os.environ.get("KIMI_API_KEY"):
-        os.environ["OPENAI_API_KEY"] = os.environ["KIMI_API_KEY"]
+    # 与 Sona .env 对齐：KIMI_APIKEY（无下划线）与 KIMI_API_KEY 均可
+    _kimi_key = os.environ.get("KIMI_API_KEY") or os.environ.get("KIMI_APIKEY")
+    if "INSIGHT_ENGINE_API_KEY" not in os.environ and _kimi_key:
+        os.environ["INSIGHT_ENGINE_API_KEY"] = _kimi_key
+    if "REPORT_ENGINE_API_KEY" not in os.environ and _kimi_key:
+        os.environ["REPORT_ENGINE_API_KEY"] = _kimi_key
+    if "QUERY_ENGINE_API_KEY" not in os.environ and _kimi_key:
+        os.environ["QUERY_ENGINE_API_KEY"] = _kimi_key
+    if "OPENAI_API_KEY" not in os.environ and _kimi_key:
+        os.environ["OPENAI_API_KEY"] = _kimi_key
     if "INSIGHT_ENGINE_BASE_URL" not in os.environ and os.environ.get("KIMI_BASE_URL"):
         os.environ["INSIGHT_ENGINE_BASE_URL"] = os.environ["KIMI_BASE_URL"]
     if "REPORT_ENGINE_BASE_URL" not in os.environ and os.environ.get("KIMI_BASE_URL"):
@@ -1350,25 +1352,25 @@ class ReportNode:
 def build_graph():
     workflow = StateGraph(TrendState)
 
-    # 获取配置中的平台列表
-    platforms = []
+    # 获取配置中的平台列表；若缺失或为空（例如无 config/config.yaml 时返回 platforms: []），使用内置默认
+    _default_platforms = [
+        {"id": "weibo", "name": "微博"},
+        {"id": "zhihu", "name": "知乎"},
+        {"id": "toutiao", "name": "今日头条"},
+        {"id": "baidu", "name": "百度热搜"},
+        {"id": "douyin", "name": "抖音"},
+        {"id": "bilibili-hot-search", "name": "bilibili 热搜"},
+        {"id": "thepaper", "name": "澎湃新闻"},
+        {"id": "tieba", "name": "贴吧"},
+        {"id": "ifeng", "name": "凤凰网"},
+        {"id": "cls-hot", "name": "财联社热门"},
+        {"id": "wallstreetcn-hot", "name": "华尔街见闻"},
+    ]
+    platforms: List[Dict[str, Any]] = []
     if CONFIG and "platforms" in CONFIG:
-        platforms = CONFIG["platforms"]
-    else:
-        # 默认平台列表
-        platforms = [
-            {"id": "weibo", "name": "微博"},
-            {"id": "zhihu", "name": "知乎"},
-            {"id": "toutiao", "name": "今日头条"},
-            {"id": "baidu", "name": "百度热搜"},
-            {"id": "douyin", "name": "抖音"},
-            {"id": "bilibili-hot-search", "name": "bilibili 热搜"},
-            {"id": "thepaper", "name": "澎湃新闻"},
-            {"id": "tieba", "name": "贴吧"},
-            {"id": "ifeng", "name": "凤凰网"},
-            {"id": "cls-hot", "name": "财联社热门"},
-            {"id": "wallstreetcn-hot", "name": "华尔街见闻"},
-        ]
+        platforms = list(CONFIG["platforms"] or [])
+    if not platforms:
+        platforms = _default_platforms
 
     # 创建Fetch节点映射
     fetch_node_map = {
@@ -1439,6 +1441,15 @@ def build_graph():
 def run(config_path: Optional[str] = None) -> str:
     """bjtupubclaw 入口：复用 trend_radar_langgraph.py 的完整效果，只做必要的配置路径与品牌名适配。"""
     global CONFIG
+    # 与 Sona 主程序共用 .env，并映射 KIMI_APIKEY / OPENAI_APIKEY / DEEPSEEK_APIKEY 等
+    try:
+        from utils.hot_topics_env import ensure_hot_topics_cwd, prepare_hot_topics_environment
+
+        prepare_hot_topics_environment()
+        ensure_hot_topics_cwd()
+    except Exception:
+        pass
+
     if config_path:
         os.environ["CONFIG_PATH"] = config_path
     CONFIG = load_config()

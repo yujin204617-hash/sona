@@ -12,8 +12,15 @@ console = Console()
 
 def run_hot_command(config_path: Optional[str] = None) -> None:
     """执行热点抓取与态势感知流程，并输出结果路径。"""
+    import os
+
     try:
-        # 惰性导入，避免 CLI 启动时引入重依赖
+        from utils.hot_topics_env import ensure_hot_topics_cwd, prepare_hot_topics_environment
+
+        prepare_hot_topics_environment()
+        ensure_hot_topics_cwd()
+
+        # 惰性导入，避免 CLI 启动时引入重依赖（在 .env 与 cwd 就绪之后）
         from tools.hottopics import run as run_hot_topics
 
         normalized_config_path: Optional[str] = None
@@ -24,6 +31,14 @@ def run_hot_command(config_path: Optional[str] = None) -> None:
         console.print("[bold cyan]启动热点抓取与态势感知流程...[/bold cyan]")
         if normalized_config_path:
             console.print(f"[dim]配置文件: {normalized_config_path}[/dim]")
+
+        if not os.environ.get("INSIGHT_ENGINE_API_KEY"):
+            console.print(
+                "[yellow]提示: 未检测到 INSIGHT_ENGINE_API_KEY。[/yellow] "
+                "请在 .env 中至少配置其一：KIMI_APIKEY、OPENAI_APIKEY、DEEPSEEK_APIKEY，"
+                "或显式设置 INSIGHT_ENGINE_API_KEY / QUERY_ENGINE_API_KEY。"
+            )
+            console.print()
 
         report_path = run_hot_topics(config_path=normalized_config_path)
         if report_path:
