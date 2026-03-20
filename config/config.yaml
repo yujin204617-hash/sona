@@ -6,7 +6,7 @@ crawler:
   request_interval: 1000 # 请求间隔(毫秒)
   enable_crawler: true # 是否启用爬取新闻功能，如果 false，则直接停止程序
   use_proxy: true # 是否启用代理，false 时为关闭
-  default_proxy: "http://127.0.0.1:10086"
+  default_proxy: "http://127.0.0.1:7897"
 
 # 🔸 daily（当日汇总模式）
 #   • 推送时机：按时推送(默认每小时推送一次)

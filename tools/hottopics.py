@@ -64,6 +64,57 @@ def load_env_file(env_path: Optional[str] = None) -> None:
 
 
 def apply_env_aliases() -> None:
+    # DashScope Qwen-codingplan (OpenAI-compatible) alias support.
+    # 优先使用 CODINGPLAN 兼容配置
+    codingplan_api_key = os.environ.get("CODINGPLAN_API_KEY") or os.environ.get("APIKEY")
+    codingplan_base_url = os.environ.get("CODINGPLAN_BASE_URL") or os.environ.get("baseurl")
+    codingplan_model_name = (
+        os.environ.get("CODINGPLAN_MODEL_NAME")
+        or os.environ.get("CODINGPLAN_MODEL")
+        or "qwen-codingplan"
+    )
+
+    # Normalize Coding Plan defaults
+    codingplan_base_url_explicit = bool(os.environ.get("CODINGPLAN_BASE_URL") or os.environ.get("baseurl"))
+    codingplan_model_explicit = bool(os.environ.get("CODINGPLAN_MODEL_NAME") or os.environ.get("CODINGPLAN_MODEL"))
+
+    if codingplan_base_url and (not codingplan_base_url_explicit):
+        if "coding.dashscope.aliyuncs.com" in codingplan_base_url and "coding-intl" not in codingplan_base_url:
+            codingplan_base_url = codingplan_base_url.replace(
+                "coding.dashscope.aliyuncs.com",
+                "coding-intl.dashscope.aliyuncs.com",
+            )
+
+    if not codingplan_model_explicit and codingplan_model_name == "qwen-codingplan":
+        codingplan_model_name = os.environ.get("CODINGPLAN_DEFAULT_MODEL_NAME") or "qwen3.5-plus"
+
+    if codingplan_api_key:
+        if "INSIGHT_ENGINE_API_KEY" not in os.environ:
+            os.environ["INSIGHT_ENGINE_API_KEY"] = codingplan_api_key
+        if "REPORT_ENGINE_API_KEY" not in os.environ:
+            os.environ["REPORT_ENGINE_API_KEY"] = codingplan_api_key
+        if "QUERY_ENGINE_API_KEY" not in os.environ:
+            os.environ["QUERY_ENGINE_API_KEY"] = codingplan_api_key
+        if "OPENAI_API_KEY" not in os.environ:
+            os.environ["OPENAI_API_KEY"] = codingplan_api_key
+
+    if codingplan_base_url:
+        if "INSIGHT_ENGINE_BASE_URL" not in os.environ:
+            os.environ["INSIGHT_ENGINE_BASE_URL"] = codingplan_base_url
+        if "REPORT_ENGINE_BASE_URL" not in os.environ:
+            os.environ["REPORT_ENGINE_BASE_URL"] = codingplan_base_url
+        if "QUERY_ENGINE_BASE_URL" not in os.environ:
+            os.environ["QUERY_ENGINE_BASE_URL"] = codingplan_base_url
+        if "OPENAI_BASE_URL" not in os.environ:
+            os.environ["OPENAI_BASE_URL"] = codingplan_base_url
+
+    if "INSIGHT_ENGINE_MODEL_NAME" not in os.environ:
+        os.environ["INSIGHT_ENGINE_MODEL_NAME"] = codingplan_model_name
+    if "REPORT_ENGINE_MODEL_NAME" not in os.environ:
+        os.environ["REPORT_ENGINE_MODEL_NAME"] = codingplan_model_name
+    if "QUERY_ENGINE_MODEL_NAME" not in os.environ:
+        os.environ["QUERY_ENGINE_MODEL_NAME"] = codingplan_model_name
+
     # 与 Sona .env 对齐：KIMI_APIKEY（无下划线）与 KIMI_API_KEY 均可
     _kimi_key = os.environ.get("KIMI_API_KEY") or os.environ.get("KIMI_APIKEY")
     if "INSIGHT_ENGINE_API_KEY" not in os.environ and _kimi_key:
@@ -286,12 +337,12 @@ class BaseFetchNode:
         proxies = None
         crawler_config = CONFIG.get("crawler", {}) if CONFIG else {}
         if crawler_config.get("use_proxy", False):
-            proxy_url = crawler_config.get("default_proxy", "")
+            proxy_url = crawler_config.get("default_proxy", "http://127.0.0.1:7897")
             if proxy_url:
                 proxies = {"http": proxy_url, "https": proxy_url}
         
         try:
-            response = requests.get(url, headers=headers, timeout=10, proxies=proxies)
+            response = requests.get(url, headers=headers, timeout=15, proxies=proxies)
             if response.status_code == 200:
                 return response.text
         except Exception as e:
@@ -433,12 +484,12 @@ class SpiderNode:
         proxies = None
         crawler_config = CONFIG.get("crawler", {}) if CONFIG else {}
         if crawler_config.get("use_proxy", False):
-            proxy_url = crawler_config.get("default_proxy", "")
+            proxy_url = crawler_config.get("default_proxy", "http://127.0.0.1:7897")
             if proxy_url:
                 proxies = {"http": proxy_url, "https": proxy_url}
         
         try:
-            response = requests.get(url, headers=headers, timeout=10, proxies=proxies)
+            response = requests.get(url, headers=headers, timeout=15, proxies=proxies)
             if response.status_code == 200:
                 return response.text
         except Exception as e:
