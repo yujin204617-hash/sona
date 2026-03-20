@@ -16,6 +16,32 @@ from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langgraph.graph import StateGraph, END
 
+_LOG_PATH = "/Users/biaowenhuang/Documents/sona-master/.cursor/debug.log"
+
+
+def _hot_debug_log(
+    hypothesis_id: str,
+    location: str,
+    message: str,
+    data: Optional[dict[str, Any]] = None,
+) -> None:
+    """Append one NDJSON line for /hot debugging (no secrets)."""
+    run_id = os.environ.get("HOT_DEBUG_RUN_ID", f"hot_{int(time.time() * 1000)}")
+    payload = {
+        "runId": run_id,
+        "hypothesisId": hypothesis_id,
+        "location": location,
+        "message": message,
+        "data": data or {},
+        "timestamp": int(time.time() * 1000),
+    }
+    try:
+        with open(_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    except Exception:
+        # Debug logs must never break the main flow.
+        pass
+
 
 def load_env_file(env_path: Optional[str] = None) -> None:
     candidate_paths = []
@@ -705,6 +731,16 @@ class MergeFetchNode:
         # raw_items已经通过Annotated自动合并了
         raw_items = state.get("raw_items", [])
         print(f"✅ 所有平台抓取完成，共 {len(raw_items)} 条原始新闻")
+
+        # #region hot_debug_H3_FETCH_EMPTY
+        _hot_debug_log(
+            hypothesis_id="H3_FETCH_EMPTY",
+            location="tools/hottopics.py:MergeFetchNode",
+            message="merge fetch results",
+            data={"raw_items_len": len(raw_items)},
+        )
+        # #endregion
+
         # 将raw_items转移到news_data中
         return {"news_data": {"raw_items": raw_items}}
 
@@ -1387,6 +1423,14 @@ class ReportNode:
         # 修复：即使有错误，只要有新闻数据就生成报告
         if not news_list:
             print("⚠️  警告: 没有新闻数据，生成空报告")
+            # #region hot_debug_H4_REPORT_EMPTY
+            _hot_debug_log(
+                hypothesis_id="H4_REPORT_EMPTY",
+                location="tools/hottopics.py:ReportNode",
+                message="no news_list -> empty html",
+                data={"news_list_len": 0},
+            )
+            # #endregion
             empty_html = """<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -1414,6 +1458,14 @@ class ReportNode:
             return {"html_report": empty_html}
 
         html_content = render_langgraph_html_report(news_list, analysis_result, discussion, classification_stats)
+        # #region hot_debug_H4_REPORT_EMPTY
+        _hot_debug_log(
+            hypothesis_id="H4_REPORT_EMPTY",
+            location="tools/hottopics.py:ReportNode",
+            message="report generated",
+            data={"news_list_len": len(news_list), "html_content_len": len(html_content or "")},
+        )
+        # #endregion
         return {"html_report": html_content}
 
 
@@ -1504,6 +1556,19 @@ def build_graph():
     workflow.add_edge("forum", "report")
     workflow.add_edge("report", END)
 
+    # #region hot_debug_H2_GRAPH
+    _hot_debug_log(
+        hypothesis_id="H2_PLATFORM_EMPTY",
+        location="tools/hottopics.py:build_graph",
+        message="graph built",
+        data={
+            "platforms_len": len(platforms),
+            "fetch_node_names_len": len(fetch_node_names),
+            "platform_ids_preview": [p.get("id") for p in platforms[:10]] if isinstance(platforms, list) else [],
+        },
+    )
+    # #endregion
+
     return workflow.compile()
 
 
@@ -1539,7 +1604,33 @@ def run(config_path: Optional[str] = None) -> str:
         "error": None,
     }
 
-    final_state = app.invoke(initial_state)
+    # #region hot_debug_H1_ENV_MISSING
+    _hot_debug_log(
+        hypothesis_id="H1_ENV_MISSING",
+        location="tools/hottopics.py:run",
+        message="hot topics run start",
+        data={
+            "has_insight_engine_apikey": bool(os.environ.get("INSIGHT_ENGINE_API_KEY")),
+            "insight_engine_base_url": os.environ.get("INSIGHT_ENGINE_BASE_URL", ""),
+            "has_query_engine_apikey": bool(os.environ.get("QUERY_ENGINE_API_KEY")),
+            "query_engine_base_url": os.environ.get("QUERY_ENGINE_BASE_URL", ""),
+        },
+    )
+    # #endregion
+
+    final_state: TrendState
+    try:
+        final_state = app.invoke(initial_state)
+    except Exception as exc:
+        # #region hot_debug_H5_EXCEPTION
+        _hot_debug_log(
+            hypothesis_id="H5_EXCEPTION",
+            location="tools/hottopics.py:run",
+            message="app.invoke raised exception",
+            data={"error_type": type(exc).__name__, "error_message": str(exc)[:500]},
+        )
+        # #endregion
+        raise
 
     report_path = ""
     if final_state.get("html_report"):
@@ -1573,6 +1664,20 @@ def run(config_path: Optional[str] = None) -> str:
         print("\n❌ 流程执行完成，但未生成报告内容。")
         if final_state.get("error"):
             print(f"错误信息: {final_state['error']}")
+
+    # #region hot_debug_H4_REPORT_EMPTY
+    _hot_debug_log(
+        hypothesis_id="H4_REPORT_EMPTY",
+        location="tools/hottopics.py:run",
+        message="hot topics run end",
+        data={
+            "has_html_report": bool(final_state.get("html_report")),
+            "html_report_len": len(final_state.get("html_report") or ""),
+            "report_path_len": len(report_path),
+        },
+    )
+    # #endregion
+
     return report_path
 
 
