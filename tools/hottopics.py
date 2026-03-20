@@ -281,8 +281,17 @@ class BaseFetchNode:
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
             "Referer": "https://newsnow.busiyi.world/",
         }
+        
+        # 支持代理配置
+        proxies = None
+        crawler_config = CONFIG.get("crawler", {}) if CONFIG else {}
+        if crawler_config.get("use_proxy", False):
+            proxy_url = crawler_config.get("default_proxy", "")
+            if proxy_url:
+                proxies = {"http": proxy_url, "https": proxy_url}
+        
         try:
-            response = requests.get(url, headers=headers, timeout=10)
+            response = requests.get(url, headers=headers, timeout=10, proxies=proxies)
             if response.status_code == 200:
                 return response.text
         except Exception as e:
@@ -419,8 +428,17 @@ class SpiderNode:
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
             "Referer": "https://newsnow.busiyi.world/",
         }
+        
+        # 支持代理配置
+        proxies = None
+        crawler_config = CONFIG.get("crawler", {}) if CONFIG else {}
+        if crawler_config.get("use_proxy", False):
+            proxy_url = crawler_config.get("default_proxy", "")
+            if proxy_url:
+                proxies = {"http": proxy_url, "https": proxy_url}
+        
         try:
-            response = requests.get(url, headers=headers, timeout=10)
+            response = requests.get(url, headers=headers, timeout=10, proxies=proxies)
             if response.status_code == 200:
                 return response.text
         except Exception as e:
