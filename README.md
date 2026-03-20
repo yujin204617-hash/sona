@@ -285,6 +285,7 @@ sona --help
 - `/memory` - 查看并恢复之前的会话
 - `/models` - 查看所有模型配置
 - `/tools` - 查看所有可用工具
+- `/hot` - 运行独立的热点抓取与态势感知流程（可选参数：配置路径）
 - `/clear` - 清除 memory 和 sandbox
 - `/exit` - 退出程序
 
@@ -477,7 +478,8 @@ sona/
 │   ├── list_tools.py        # 列出所有工具
 │   ├── run_extract_search_terms.py
 │   ├── run_data_collect.py
-│   └── run_report_html.py
+│   ├── run_report_html.py
+│   └── run_hottopics.py
 ├── memory/                  # 会话存储目录（自动创建）
 ├── sandbox/                 # 任务工作目录（自动创建）
 ├── pyproject.toml           # 项目配置

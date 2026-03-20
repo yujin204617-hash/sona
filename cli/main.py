@@ -10,6 +10,7 @@ from cli.session_ui import show_session_selector
 from cli.tools_ui import show_tools_list
 from cli.models_ui import show_models_list
 from cli.clear_utils import confirm_and_clear
+from cli.hot_ui import run_hot_command
 
 
 def interactive() -> None:
@@ -61,6 +62,13 @@ def interactive() -> None:
                 if user_input.strip() == "/clear":
                     confirm_and_clear()
                     continue
+
+                # 处理 /hot 命令（独立热点抓取与态势感知）
+                if user_input.strip().startswith("/hot"):
+                    parts = user_input.strip().split(maxsplit=1)
+                    custom_config_path = parts[1] if len(parts) > 1 else None
+                    run_hot_command(custom_config_path)
+                    continue
                 
                 # 处理其他未知命令
                 console.print(f"[yellow]未知命令: {user_input}[/yellow]")
@@ -69,6 +77,8 @@ def interactive() -> None:
                 console.print("  [cyan]/memory[/cyan]  - 查看并恢复之前的会话")
                 console.print("  [cyan]/models[/cyan]  - 查看所有模型配置")
                 console.print("  [cyan]/tools[/cyan]   - 查看所有可用工具")
+                console.print("  [cyan]/hot[/cyan]     - 运行热点抓取与态势感知流程")
+                console.print("  [dim]                 示例: /hot 或 /hot config/config.yaml[/dim]")
                 console.print("  [cyan]/clear[/cyan]   - 清除 memory 和 sandbox")
                 console.print("  [cyan]/exit[/cyan]    - 退出程序")
                 continue

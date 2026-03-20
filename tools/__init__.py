@@ -7,6 +7,7 @@ from tools.analysis_timeline import analysis_timeline
 from tools.analysis_sentiment import analysis_sentiment
 from tools.report_html import report_html
 from tools.graph_rag_query import graph_rag_query
+from tools.hottopics import run as hottopics_run
 
 __all__ = [
     "extract_search_terms", 
@@ -15,5 +16,6 @@ __all__ = [
     "analysis_timeline", 
     "analysis_sentiment", 
     "report_html",
-    "graph_rag_query"
+    "graph_rag_query",
+    "hottopics_run",
 ]
