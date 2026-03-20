@@ -74,6 +74,18 @@ def prepare_hot_topics_environment() -> None:
                 # 读配置失败时走下方的简单兜底逻辑
                 pass
 
+    # 强制：如果用户使用 QWEN coding plan 的单一额度（QWEN_APIKEY），
+    # 即使没有 model.yaml，也要把 base_url 强制到 coding plan。
+    qwen = os.environ.get("QWEN_APIKEY") or os.environ.get("QWEN_API_KEY")
+    qwen_model = os.environ.get("QWEN_MODEL_NAME") or os.environ.get("QWEN_MODEL") or "qwen3.5-plus"
+    coding_plan_base_url = "https://coding.dashscope.aliyuncs.com/v1"
+
+    if qwen:
+        _set_if_absent("INSIGHT_ENGINE_API_KEY", qwen)
+        _set_if_absent("INSIGHT_ENGINE_MODEL_NAME", qwen_model)
+        # 强制覆盖 base_url：避免走 compatible-mode 导致错误计费
+        os.environ["INSIGHT_ENGINE_BASE_URL"] = coding_plan_base_url
+
     # 兜底：如果仍未设置，再用 KIMI/OPENAI/DEEPSEEK 的旧映射规则
     if not os.environ.get("INSIGHT_ENGINE_API_KEY"):
         if kimi:
@@ -98,8 +110,9 @@ def prepare_hot_topics_environment() -> None:
     # QUERY_NODE 使用同一套 key/base_url/model（避免用户重复配置）
     if not os.environ.get("QUERY_ENGINE_API_KEY") and os.environ.get("INSIGHT_ENGINE_API_KEY"):
         _set_if_absent("QUERY_ENGINE_API_KEY", os.environ["INSIGHT_ENGINE_API_KEY"])
-        _set_if_absent("QUERY_ENGINE_BASE_URL", os.environ.get("INSIGHT_ENGINE_BASE_URL", moonshot_base))
         _set_if_absent("QUERY_ENGINE_MODEL_NAME", os.environ.get("INSIGHT_ENGINE_MODEL_NAME", moonshot_model))
+        # 若 Qwen 强制了 coding plan，则也强制 QUERY 使用同一 base_url
+        os.environ["QUERY_ENGINE_BASE_URL"] = os.environ.get("INSIGHT_ENGINE_BASE_URL", moonshot_base)
 
     # 若用户只配置了 QWEN_APIKEY（但 model.yaml 不可读），仍强制 base_url 为 coding plan
     if os.environ.get("QWEN_APIKEY") and not os.environ.get("INSIGHT_ENGINE_BASE_URL"):
