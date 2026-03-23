@@ -8,6 +8,7 @@ import yaml
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any, TypedDict, Annotated
+from urllib.parse import quote
 import operator
 import pytz
 import requests
@@ -274,6 +275,105 @@ def load_past_hours_data(lookback_hours: int = 12) -> List[Dict[str, Any]]:
     return all_items
 
 
+def load_historical_ranks(lookback_hours: int = 24) -> Dict[tuple, Dict[str, Any]]:
+    """
+    加载历史排名数据，用于趋势分析
+    返回: {(source_id, title): {"avg_rank": float, "min_rank": int, "count": int, "last_rank": int}}
+    """
+    data_dir = get_hourly_data_dir()
+    now = get_beijing_time()
+    cutoff = now - timedelta(hours=lookback_hours)
+
+    # 聚合历史数据: (source_id, title) -> 排名列表
+    history: Dict[tuple, List[int]] = {}
+
+    for date_dir in sorted(data_dir.glob("20*"), reverse=False):
+        date_str = date_dir.name
+        try:
+            date_obj = datetime.strptime(date_str, "%Y%m%d")
+        except ValueError:
+            continue
+
+        for hour_dir in sorted(date_dir.glob("*"), reverse=False):
+            hour_str = hour_dir.name
+            try:
+                hour_obj = int(hour_str)
+                if hour_obj < 0 or hour_obj > 23:
+                    continue
+            except ValueError:
+                continue
+
+            file_timestamp = datetime.combine(date_obj.date(), datetime.min.time().replace(hour=hour_obj))
+            file_timestamp = pytz.timezone("Asia/Shanghai").localize(file_timestamp)
+
+            if file_timestamp < cutoff:
+                continue
+
+            for json_file in hour_dir.glob("*.json"):
+                try:
+                    with open(json_file, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                        items = data.get("items", [])
+                        for item in items:
+                            source_id = item.get("source_id") or item.get("source") or ""
+                            title = item.get("title") or ""
+                            if not source_id or not title:
+                                continue
+                            key = (source_id, title)
+                            rank = item.get("rank")
+                            if rank is not None:
+                                if key not in history:
+                                    history[key] = []
+                                history[key].append(rank)
+                except Exception as e:
+                    continue
+
+    # 转换为统计信息
+    result: Dict[tuple, Dict[str, Any]] = {}
+    for key, ranks in history.items():
+        if len(ranks) > 0:
+            result[key] = {
+                "avg_rank": sum(ranks) / len(ranks),
+                "min_rank": min(ranks),
+                "max_rank": max(ranks),
+                "count": len(ranks),
+                "last_rank": ranks[-1] if ranks else None,
+            }
+
+    return result
+
+
+def calculate_trend(current_rank: int, historical_stats: Dict[str, Any]) -> str:
+    """
+    计算趋势：基于历史数据比较当前排名
+    返回: "new" | "up" | "down" | "stable"
+    """
+    if not historical_stats:
+        return "new"  # 新上榜
+
+    avg_rank = historical_stats.get("avg_rank", 0)
+    min_rank = historical_stats.get("min_rank", 999)
+    last_rank = historical_stats.get("last_rank", 999)
+
+    # 阈值设置
+    RANK_CHANGE_THRESHOLD = 3  # 排名变化超过3位视为上升/下降
+
+    # 比较当前排名与历史平均/上次排名
+    if current_rank < last_rank - RANK_CHANGE_THRESHOLD:
+        return "up"  # 上升
+    elif current_rank > last_rank + RANK_CHANGE_THRESHOLD:
+        return "down"  # 下降
+    elif abs(current_rank - avg_rank) <= RANK_CHANGE_THRESHOLD:
+        return "stable"  # 稳定
+    else:
+        # 综合判断
+        if current_rank < avg_rank:
+            return "up"
+        elif current_rank > avg_rank:
+            return "down"
+        return "stable"
+
+
 def html_escape(text: str) -> str:
     """HTML转义"""
     if not isinstance(text, str):
@@ -376,8 +476,8 @@ class BaseFetchNode:
         try:
             data = json.loads(raw_data)
             raw_items = data.get("items", [])
-            # 为了提高样本量，这里尽量多保留一些热搜项（例如前 30 条）
-            top_items = raw_items[:30]
+            # 每个平台只保留前 10 条高热度话题
+            top_items = raw_items[:10]
             for idx, item in enumerate(top_items, 1):
                 items.append(
                     {
@@ -598,7 +698,7 @@ class SpiderNode:
 
 
 class NormalizeNewsNode:
-    """清洗、去重、排序节点"""
+    """清洗、去重、排序节点 - 带趋势分析"""
 
     def __init__(self):
         pass
@@ -615,8 +715,12 @@ class NormalizeNewsNode:
         title = re.sub(r"\s+", " ", title)
         return title
 
-    def normalize_news(self, raw_items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """清洗、去重、排序新闻"""
+    def normalize_news(
+        self,
+        raw_items: List[Dict[str, Any]],
+        historical_ranks: Optional[Dict[tuple, Dict[str, Any]]] = None,
+    ) -> List[Dict[str, Any]]:
+        """清洗、去重、排序新闻 - 带趋势分析"""
         if not raw_items:
             return []
 
@@ -630,17 +734,22 @@ class NormalizeNewsNode:
                 item_copy["title"] = cleaned_title
                 cleaned_items.append(item_copy)
 
-        # 2. 去重：基于 (source_id, title) 去重
-        seen = {}
+        # 2. 去重：基于 (source_id, title) 去重，保留历史排名信息
+        seen: Dict[tuple, Dict[str, Any]] = {}
         deduplicated_items = []
         for item in cleaned_items:
-            key = (item.get("source_id") or item.get("source") or "", item.get("title") or "")
-            if not key[1]:  # 标题为空则跳过
+            source_id = item.get("source_id") or item.get("source") or ""
+            title = item.get("title") or ""
+            key = (source_id, title)
+            if not title:  # 标题为空则跳过
                 continue
 
             existing = seen.get(key)
             if existing is None:
                 seen[key] = item
+                # 记录历史排名信息用于后续趋势计算
+                if historical_ranks and key in historical_ranks:
+                    item["_historical_stats"] = historical_ranks[key]
                 deduplicated_items.append(item)
             else:
                 # 保留更靠前的排名和更高的热度
@@ -654,7 +763,16 @@ class NormalizeNewsNode:
                 if hot_new is not None and (hot_old is None or hot_new > hot_old):
                     existing["hot_value"] = hot_new
 
-        # 3. 排序：按平台权重和平台内排名排序
+        # 3. 计算趋势并添加趋势标记
+        for item in deduplicated_items:
+            current_rank = item.get("rank", 999)
+            historical_stats = item.get("_historical_stats")
+            trend = calculate_trend(current_rank, historical_stats)
+            item["trend"] = trend
+            # 清理内部使用的临时字段
+            item.pop("_historical_stats", None)
+
+        # 4. 排序：按平台权重和平台内排名排序
         platform_order = ["weibo", "baidu", "douyin", "zhihu", "toutiao", "tieba", "thepaper", "cls-hot", "ifeng", "wallstreetcn-hot"]
         platform_index = {pid: idx for idx, pid in enumerate(platform_order)}
 
@@ -669,8 +787,8 @@ class NormalizeNewsNode:
         return sorted_items
 
     def __call__(self, state: TrendState) -> TrendState:
-        """执行清洗、去重、排序"""
-        print("--- [NormalizeNewsNode] 开始清洗、去重、排序 ---")
+        """执行清洗、去重、排序 - 带趋势分析"""
+        print("--- [NormalizeNewsNode] 开始清洗、去重、排序 + 趋势分析 ---")
 
         # 从状态中获取原始数据
         news_data = state.get("news_data", {})
@@ -680,6 +798,11 @@ class NormalizeNewsNode:
         print("正在加载过去12小时的历史数据...")
         historical_items = load_past_hours_data(lookback_hours=12)
         print(f"从历史数据中加载了 {len(historical_items)} 条新闻")
+
+        # 加载过去24小时的历史排名用于趋势计算
+        print("正在加载历史排名数据用于趋势分析...")
+        historical_ranks = load_historical_ranks(lookback_hours=24)
+        print(f"历史排名数据: {len(historical_ranks)} 个话题")
 
         # 若当前抓取与近12小时都为空，扩大窗口做离线兜底，提升 /hot 在网络异常时的可用性
         if not raw_items and not historical_items:
@@ -691,10 +814,18 @@ class NormalizeNewsNode:
         # 合并当前抓取的数据和历史数据
         all_items = raw_items + historical_items
 
-        # 执行清洗、去重、排序
-        normalized_items = self.normalize_news(all_items)
+        # 执行清洗、去重、排序，传入历史排名用于趋势计算
+        normalized_items = self.normalize_news(all_items, historical_ranks)
+
+        # 统计趋势分布
+        trend_counts = {"new": 0, "up": 0, "down": 0, "stable": 0}
+        for item in normalized_items:
+            trend = item.get("trend", "stable")
+            if trend in trend_counts:
+                trend_counts[trend] += 1
 
         print(f"✅ 清洗、去重、排序完成，共 {len(normalized_items)} 条新闻")
+        print(f"📊 趋势分布: 新上榜 {trend_counts['new']} | 上升 {trend_counts['up']} | 下降 {trend_counts['down']} | 稳定 {trend_counts['stable']}")
 
         return {"news_data": {"news_list": normalized_items, "raw_items": []}, "raw_items": []}
 
@@ -828,13 +959,13 @@ class InsightNode:
             score = platform_weight * 0.5 + rank_weight * 0.3 + hot_weight * 0.2
             return score
 
-        # 按优先级排序并限制数量（最多120条，避免输入过长）
+        # 按优先级排序（不去除数量限制，直接分析全部新闻）
         sorted_news = sorted(news_list, key=news_priority_score, reverse=True)
-        max_news_count = 120  # 限制新闻数量，减少输入长度
-        selected_news = sorted_news[:max_news_count]
+        # 不再限制数量，直接分析所有新闻
+        selected_news = sorted_news
 
-        if len(news_list) > max_news_count:
-            print(f"📊 从 {len(news_list)} 条新闻中筛选出前 {max_news_count} 条高优先级新闻进行分析")
+        if len(news_list) > 500:
+            print(f"📊 分析全部 {len(news_list)} 条新闻（已移除120条限制）")
 
         # 优化2: 简化数据格式，只保留必要信息
         news_text = "\n".join([f"- {n['title']}" for n in selected_news])  # 移除来源信息，减少字符数
@@ -1242,7 +1373,13 @@ def render_langgraph_html_report(
         .raw-table tbody tr:hover { background: #f9fafb; }
         .raw-table .platform-cell { white-space: nowrap; color: #374151; font-weight: 500; }
         .raw-table .rank-cell { width: 60px; color: #6b7280; }
+        .raw-table .trend-cell { width: 50px; text-align: center; }
         .raw-table .title-cell { color: #111827; }
+        .trend-badge { font-size: 14px; font-weight: bold; }
+        .trend-new { color: #059669; }
+        .trend-up { color: #dc2626; }
+        .trend-down { color: #6b7280; }
+        .trend-stable { color: #9ca3af; }
         .raw-table .hot-badge { margin-left: 6px; font-size: 11px; color: #b91c1c; }
         .footer { margin-top: 24px; padding: 20px 24px; background: #f8f9fa; border-top: 1px solid #e5e7eb; text-align: center; }
         .footer-content { font-size: 13px; color: #6b7280; line-height: 1.6; }
@@ -1301,22 +1438,44 @@ def render_langgraph_html_report(
                 html += '<div class="topic-meta">' + html_escape(" · ".join(meta_parts)) + "</div>"
             html += '<div class="topic-comment">' + html_escape(comment) + "</div></div>"
 
+    # 趋势图标映射
+    TREND_ICONS = {
+        "new": '<span class="trend-badge trend-new" title="新上榜">🆕</span>',
+        "up": '<span class="trend-badge trend-up" title="排名上升">↑</span>',
+        "down": '<span class="trend-badge trend-down" title="排名下降">↓</span>',
+        "stable": '<span class="trend-badge trend-stable" title="排名稳定">→</span>',
+    }
+
+    # 获取第一个重大事件作为剖析标题后缀
+    major_event_title = ""
+    if top_topics and len(top_topics) > 0:
+        major_event_title = top_topics[0].get("topic", "")
+    event_title_suffix = f": {major_event_title}" if major_event_title else ""
+
     html += """
             </div>
             <div class="section">
-                <div class="section-title">重大事件剖析</div>
+                <div class="section-title">重大事件剖析"""
+    html += html_escape(event_title_suffix)
+    html += """</div>
                 <div class="section-body">"""
     html += html_escape(forum_discussion or "暂无重大事件剖析")
     html += """</div>
             </div>
             <div class="section">
                 <div class="section-title">原始信息抓取（来源与链接）</div>
+                <div style="margin-bottom: 12px;">
+                    <input type="text" id="topicSearchBox" placeholder="🔍 搜索热门话题..." 
+                           onkeyup="filterTopics()"
+                           style="width: 100%; padding: 10px 14px; border: 1px solid #e5e7eb; border-radius: 8px; font-size: 14px; outline: none; box-sizing: border-box;">
+                </div>
                 <div class="raw-table-wrapper">
-                    <table class="raw-table">
+                    <table class="raw-table" id="topicsTable">
                         <thead>
                             <tr>
                                 <th>平台</th>
                                 <th>排行</th>
+                                <th>趋势</th>
                                 <th>信息 & 链接</th>
                             </tr>
                         </thead>
@@ -1340,20 +1499,36 @@ def render_langgraph_html_report(
 
     rows.sort(key=lambda n: (_platform_sort_key(n), n.get("rank") or 9999))
 
+    # 热门话题计数器
+    topic_counter = 0
+
     for n in rows:
+        topic_counter += 1
         platform_name = n.get("source_name") or n.get("source") or "其他"
         rank = n.get("rank")
         rank_text = str(rank) if rank is not None else "-"
         title = n.get("title") or ""
-        link_url = n.get("mobile_url") or n.get("url") or ""
+        original_link_url = n.get("mobile_url") or n.get("url") or ""
         hot_val = n.get("hot_value")
+        # 趋势
+        trend = n.get("trend", "stable")
+        trend_icon = TREND_ICONS.get(trend, TREND_ICONS["stable"])
+        # 热门话题#编号
+        topic_num = f"#{topic_counter}"
+        
+        # 微博智搜链接：点击后打开微博搜索页面
+        weibo_search_url = f"https://s.weibo.com/aisearch?q={quote(title)}&Refer=weibo_aisearch"
 
         html += "<tr>"
         html += '<td class="platform-cell">' + html_escape(platform_name) + "</td>"
         html += '<td class="rank-cell">' + html_escape(rank_text) + "</td>"
+        html += '<td class="trend-cell">' + trend_icon + "</td>"
         html += '<td class="title-cell">'
-        if link_url:
-            html += '<a href="' + html_escape(link_url) + '" target="_blank" class="news-link">' + html_escape(title) + "</a>"
+        # 添加热门话题#编号
+        html += '<span class="topic-num" style="color: #dc2626; font-weight: 600; margin-right: 6px;">' + html_escape(topic_num) + '</span>'
+        # 使用微博智搜链接替代原始链接
+        if title:
+            html += '<a href="' + html_escape(weibo_search_url) + '" target="_blank" class="news-link" title="点击查看微博智搜结果">' + html_escape(title) + "</a>"
         else:
             html += html_escape(title)
         if hot_val is not None and hot_val != 0:
@@ -1456,6 +1631,41 @@ def render_langgraph_html_report(
             }
         }
         document.addEventListener('DOMContentLoaded', function(){ window.scrollTo(0, 0); });
+
+        // 搜索热门话题功能
+        function filterTopics() {
+            const input = document.getElementById('topicSearchBox');
+            const filter = input.value.toLowerCase();
+            const table = document.getElementById('topicsTable');
+            const rows = table.getElementsByTagName('tr');
+            let visibleCount = 0;
+            for (let i = 1; i < rows.length; i++) { // 跳过表头
+                const row = rows[i];
+                const titleCell = row.querySelector('.title-cell');
+                if (titleCell) {
+                    const titleText = titleCell.textContent || titleCell.innerText;
+                    if (titleText.toLowerCase().indexOf(filter) > -1) {
+                        row.style.display = '';
+                        visibleCount++;
+                    } else {
+                        row.style.display = 'none';
+                    }
+                }
+            }
+            // 显示搜索结果数量
+            const searchInfo = document.getElementById('searchInfo');
+            if (filter) {
+                if (!searchInfo) {
+                    const infoDiv = document.createElement('div');
+                    infoDiv.id = 'searchInfo';
+                    infoDiv.style.cssText = 'padding: 8px 12px; background: #f0f9ff; border-radius: 6px; margin-bottom: 12px; font-size: 13px; color: #0369a1;';
+                    input.parentNode.insertBefore(infoDiv, input.nextSibling);
+                }
+                document.getElementById('searchInfo').textContent = `找到 ${visibleCount} 条相关话题`;
+            } else if (searchInfo) {
+                searchInfo.remove();
+            }
+        }
     </script>
 </body>
 </html>"""
