@@ -19,6 +19,7 @@ from utils.path import ensure_task_dirs, get_task_result_dir
 from utils.prompt_loader import get_report_html_prompt
 from utils.task_context import get_task_id
 from utils.methodology_loader import load_methodology_for_report
+import webbrowser
 
 
 def _read_json_files(directory: str) -> List[Dict[str, Any]]:
@@ -587,10 +588,35 @@ def report_html(
         analysis_results_text += "\n"
     
     # 格式化prompt（包含方法论）
-    prompt = prompt_template.format(
-        event_introduction=eventIntroduction,
-        analysis_results=analysis_results_text,
-        methodology=methodology_content
+    # 使用“定向占位符替换”，避免 ECharts 模板中的 {name}/{value} 被误解析
+    def _replace_placeholders(t: str, *, event_intro: str, analysis_text: str, methodology_text: str) -> str:
+        try:
+            import re as _re
+        except Exception:
+            return (
+                t.replace("{event_introduction}", event_intro)
+                .replace("{analysis_results}", analysis_text)
+                .replace("{methodology}", methodology_text)
+            )
+
+        mapping = {
+            "event_introduction": event_intro,
+            "analysis_results": analysis_text,
+            "methodology": methodology_text,
+        }
+        pattern = _re.compile(r"\{(event_introduction|analysis_results|methodology)\}")
+
+        def repl(m):
+            key = m.group(1)
+            return str(mapping.get(key, m.group(0)))
+
+        return pattern.sub(repl, t)
+
+    prompt = _replace_placeholders(
+        prompt_template,
+        event_intro=eventIntroduction,
+        analysis_text=analysis_results_text,
+        methodology_text=methodology_content,
     )
     prompt += (
         "\n\n【事实边界要求】\n"
@@ -699,5 +725,15 @@ def report_html(
     }
     if model_error:
         result["warning"] = model_error
-    
+
+    # 尝试在默认浏览器中自动打开（失败不影响主流程）
+    try:
+        if file_url:
+            webbrowser.open(file_url)
+            result["opened_in_browser"] = True
+        else:
+            result["opened_in_browser"] = False
+    except Exception as _:
+        result["opened_in_browser"] = False
+
     return json_module.dumps(result, ensure_ascii=False)
